@@ -1,15 +1,15 @@
 package de.komoot.photon.nominatim;
 
-import com.vividsolutions.jts.io.ParseException;
-import com.vividsolutions.jts.io.WKTReader;
+import org.locationtech.jts.io.ParseException;
+import org.locationtech.jts.io.WKTReader;
 import de.komoot.photon.PhotonDoc;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.*;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
-public class NominatimResultTest {
+class NominatimResultTest {
     private final PhotonDoc simpleDoc = new PhotonDoc(10000, "N", 123, "place", "house")
                                                 .countryCode("de");
 
@@ -35,25 +35,30 @@ public class NominatimResultTest {
         assertEquals(housenumbers, outnumbers);
     }
 
+    private void assertNoHousenumber(List<PhotonDoc> docs) {
+        assertEquals(1, docs.size());
+        assertNull(docs.get(0).getHouseNumber());
+    }
+
     private void assertSimpleOnly(List<PhotonDoc> docs) {
         assertEquals(1, docs.size());
         assertSame(simpleDoc, docs.get(0));
     }
 
     @Test
-    public void testIsUsefulForIndex() {
+    void testIsUsefulForIndex() {
         assertFalse(simpleDoc.isUsefulForIndex());
         assertFalse(new NominatimResult(simpleDoc).isUsefulForIndex());
     }
 
     @Test
-    public void testGetDocsWithHousenumber() {
+    void testGetDocsWithHousenumber() {
         List<PhotonDoc> docs = new NominatimResult(simpleDoc).getDocsWithHousenumber();
         assertSimpleOnly(docs);
     }
 
     @Test
-    public void testAddHousenumbersFromStringSimple() {
+    void testAddHousenumbersFromStringSimple() {
         NominatimResult res = new NominatimResult(simpleDoc);
         res.addHousenumbersFromString("34");
 
@@ -61,7 +66,7 @@ public class NominatimResultTest {
     }
 
     @Test
-    public void testAddHousenumbersFromStringList() {
+    void testAddHousenumbersFromStringList() {
         NominatimResult res = new NominatimResult(simpleDoc);
         res.addHousenumbersFromString("34; 50b");
 
@@ -72,7 +77,31 @@ public class NominatimResultTest {
     }
 
     @Test
-    public void testAddHouseNumbersFromInterpolationBad() throws ParseException {
+    void testLongHousenumber() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("987987誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマー");
+        assertNoHousenumber(res.getDocsWithHousenumber());
+    }
+
+    @Test
+    void testHousenumberWithNoNumber() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("something bad");
+        assertNoHousenumber(res.getDocsWithHousenumber());
+    }
+
+    @Test
+    void testHousenumberWithNoNumberInPart() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("14, portsmith");
+        assertNoHousenumber(res.getDocsWithHousenumber());
+    }
+
+    @Test
+    void testAddHouseNumbersFromInterpolationBad() throws ParseException {
         NominatimResult res = new NominatimResult(simpleDoc);
 
         WKTReader reader = new WKTReader();
@@ -86,7 +115,7 @@ public class NominatimResultTest {
     }
 
     @Test
-    public void testAddHouseNumbersFromInterpolationOdd() throws ParseException {
+    void testAddHouseNumbersFromInterpolationOdd() throws ParseException {
         NominatimResult res = new NominatimResult(simpleDoc);
 
         WKTReader reader = new WKTReader();
@@ -105,7 +134,7 @@ public class NominatimResultTest {
     }
 
     @Test
-    public void testAddHouseNumbersFromInterpolationEven() throws ParseException {
+    void testAddHouseNumbersFromInterpolationEven() throws ParseException {
         NominatimResult res = new NominatimResult(simpleDoc);
 
         WKTReader reader = new WKTReader();
@@ -124,7 +153,7 @@ public class NominatimResultTest {
     }
 
     @Test
-    public void testAddHouseNumbersFromInterpolationAll() throws ParseException {
+    void testAddHouseNumbersFromInterpolationAll() throws ParseException {
         NominatimResult res = new NominatimResult(simpleDoc);
 
         WKTReader reader = new WKTReader();

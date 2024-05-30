@@ -1,12 +1,10 @@
 package de.komoot.photon.nominatim.testdb;
 
-import com.vividsolutions.jts.geom.Geometry;
-import com.vividsolutions.jts.io.ParseException;
-import com.vividsolutions.jts.io.WKTReader;
+import org.locationtech.jts.geom.Geometry;
 import de.komoot.photon.nominatim.DBDataAdapter;
 import org.json.JSONObject;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-import javax.annotation.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -28,18 +26,23 @@ public class H2DataAdapter implements DBDataAdapter {
         return out;
     }
 
-    @Nullable
     @Override
     public Geometry extractGeometry(ResultSet rs, String columnName) throws SQLException {
-        String wkt = (String) rs.getObject(columnName);
-        if (wkt != null) {
-            try {
-                return new WKTReader().read(wkt);
-            } catch (ParseException e) {
-                // ignore
-            }
-        }
-
-        return null;
+        return (Geometry) rs.getObject(columnName);
     }
+
+    @Override
+    public boolean hasColumn(JdbcTemplate template, String table, String column)
+    {
+        if ("location_property_osmline".equals(table) && "step".equals(column)) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public String deleteReturning(String deleteSQL, String columns) {
+        return "SELECT " + columns + " FROM OLD TABLE (" + deleteSQL + ")";
+    }
+
 }

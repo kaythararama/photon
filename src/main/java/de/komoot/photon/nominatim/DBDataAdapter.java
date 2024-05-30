@@ -1,14 +1,14 @@
 package de.komoot.photon.nominatim;
 
-import com.vividsolutions.jts.geom.Geometry;
+import org.locationtech.jts.geom.Geometry;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-import javax.annotation.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Map;
 
 /**
- * Defines utility functions to parse data from the database.
+ * Defines utility functions to parse data from the database and create SQL queries.
  */
 public interface DBDataAdapter {
     /**
@@ -19,6 +19,15 @@ public interface DBDataAdapter {
     /**
      * Create a JTS geometry from the given column data.
      */
-    @Nullable
     Geometry extractGeometry(ResultSet rs, String columnName) throws SQLException;
+
+    /**
+     * Check if a table has the given column.
+     */
+    boolean hasColumn(JdbcTemplate template, String table, String column);
+
+    /**
+     * Wrap a DELETE statement with a RETURNING clause.
+     */
+    String deleteReturning(String deleteSQL, String columns);
 }

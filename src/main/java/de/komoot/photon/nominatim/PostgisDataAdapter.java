@@ -1,18 +1,19 @@
 package de.komoot.photon.nominatim;
 
-import com.google.common.collect.Maps;
-import com.vividsolutions.jts.geom.Geometry;
-import org.postgis.jts.JtsGeometry;
+import net.postgis.jdbc.PGgeometry;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.io.ParseException;
+import org.locationtech.jts.io.WKTReader;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
-import javax.annotation.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * utility functions to parse data from postgis
- *
- * @author christoph
+ * Utility functions to parse data from and create SQL for PostgreSQL/PostGIS.
  */
 public class PostgisDataAdapter implements DBDataAdapter {
 
@@ -20,19 +21,41 @@ public class PostgisDataAdapter implements DBDataAdapter {
     public Map<String, String> getMap(ResultSet rs, String columnName) throws SQLException {
         Map<String, String> map = (Map<String, String>) rs.getObject(columnName);
         if (map == null) {
-            return Maps.newHashMap();
+            return new HashMap<>();
         }
 
         return map;
     }
 
-    @Nullable
     @Override
     public Geometry extractGeometry(ResultSet rs, String columnName) throws SQLException {
-        JtsGeometry geom = (JtsGeometry) rs.getObject(columnName);
-        if (geom == null) {
-            return null;
+        PGgeometry wkt = (PGgeometry) rs.getObject(columnName);
+        if (wkt != null) {
+            try {
+                StringBuffer sb = new StringBuffer();
+                wkt.getGeometry().outerWKT(sb);
+                return new WKTReader().read(sb.toString());
+            } catch (ParseException e) {
+                // ignore
+            }
         }
-        return geom.getGeometry();
+
+        return null;
+    }
+
+    @Override
+    public boolean hasColumn(JdbcTemplate template, String table, String column) {
+        return template.query("SELECT count(*) FROM information_schema.columns WHERE table_name = ? and column_name = ?",
+                new RowMapper<Boolean>() {
+                    @Override
+                    public Boolean mapRow(ResultSet resultSet, int i) throws SQLException {
+                        return resultSet.getInt(1) > 0;
+                    }
+                }, table, column).get(0);
+    }
+
+    @Override
+    public String deleteReturning(String deleteSQL, String columns) {
+        return deleteSQL + " RETURNING " + columns;
     }
 }

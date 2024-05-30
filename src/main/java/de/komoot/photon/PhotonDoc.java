@@ -1,24 +1,19 @@
 package de.komoot.photon;
 
-import com.google.common.collect.ImmutableMap;
-import com.neovisionaries.i18n.CountryCode;
-import com.vividsolutions.jts.geom.Envelope;
-import com.vividsolutions.jts.geom.Geometry;
-import com.vividsolutions.jts.geom.Point;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Point;
 import de.komoot.photon.nominatim.model.AddressType;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
 
 import java.util.*;
 
 /**
- * denormalized doc with all information needed be dumped to elasticsearch
- *
- * @author christoph
+ * Denormalized document with all information needed for saving in the Photon database.
  */
-@Getter
-@Slf4j
 public class PhotonDoc {
+    private static final Logger LOGGER = org.slf4j.LoggerFactory.getLogger(PhotonDoc.class);
+
     private final long placeId;
     private final String osmType;
     private final long osmId;
@@ -31,7 +26,7 @@ public class PhotonDoc {
     private Envelope bbox = null;
     private long parentPlaceId = 0; // 0 if unset
     private double importance = 0;
-    private CountryCode countryCode = null;
+    private String countryCode = null;
     private long linkedPlaceId = 0; // 0 if unset
     private int rankAddress = 30;
 
@@ -92,7 +87,9 @@ public class PhotonDoc {
     }
 
     public PhotonDoc countryCode(String countryCode) {
-        this.countryCode = CountryCode.getByCode(countryCode, false);
+        if (countryCode != null) {
+            this.countryCode = countryCode.toUpperCase();
+        }
         return this;
     }
 
@@ -108,9 +105,7 @@ public class PhotonDoc {
 
             String addressPostCode = address.get("postcode");
             if (addressPostCode != null && !addressPostCode.equals(postcode)) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Replacing postcode " + postcode + " with " + addressPostCode + " for osmId #" + osmId);
-                }
+                LOGGER.debug("Replacing postcode {} with {} for osmId #{}", postcode, addressPostCode, osmId);
                 postcode = addressPostCode;
             }
         }
@@ -161,13 +156,42 @@ public class PhotonDoc {
         return this;
     }
 
-    public String getUid() {
-        if (houseNumber == null)
-            return String.valueOf(placeId);
-        else
-            return String.valueOf(placeId) + "." + houseNumber;
+    public String getUid(int objectId) {
+        return makeUid(placeId, objectId);
     }
 
+    static public String makeUid(long placeId, int objectId) {
+        if (objectId <= 0)
+            return String.valueOf(placeId);
+
+        return String.format("%d.%d", placeId, objectId);
+    }
+
+    public void copyName(Map<String, String> target, String targetField, String nameField) {
+        String outname = name.get("_place_" + nameField);
+        if (outname == null) {
+            outname = name.get(nameField);
+        }
+
+        if (outname != null) {
+            target.put(targetField, outname);
+        }
+    }
+
+    public void copyAddressName(Map<String, String> target, String targetField, AddressType addressType, String nameField) {
+        Map<String, String> names = addressParts.get(addressType);
+
+        if (names != null) {
+            String outname = names.get("_place_" + nameField);
+            if (outname == null) {
+                outname = names.get(nameField);
+            }
+
+            if (outname != null) {
+                target.put(targetField, outname);
+            }
+        }
+    }
 
     public AddressType getAddressType() {
         return AddressType.fromRank(rankAddress);
@@ -198,12 +222,10 @@ public class PhotonDoc {
 
             String existingName = map.get("name");
             if (!field.equals(existingName)) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Replacing " + addressFieldName + " name '" + existingName + "' with '" + field + "' for osmId #" + osmId);
-                }
+                LOGGER.debug("Replacing {} name '{}' with '{}' for osmId #{}", addressFieldName, existingName, field, osmId);
                 // we keep the former name in the context as it might be helpful when looking up typos
                 if (!Objects.isNull(existingName)) {
-                    context.add(ImmutableMap.of("formerName", existingName));
+                    context.add(Collections.singletonMap("formerName", existingName));
                 }
                 map.put("name", field);
             }
@@ -223,4 +245,71 @@ public class PhotonDoc {
         addressParts.put(AddressType.COUNTRY, names);
     }
 
+    public long getPlaceId() {
+        return this.placeId;
+    }
+
+    public String getOsmType() {
+        return this.osmType;
+    }
+
+    public long getOsmId() {
+        return this.osmId;
+    }
+
+    public String getTagKey() {
+        return this.tagKey;
+    }
+
+    public String getTagValue() {
+        return this.tagValue;
+    }
+
+    public Map<String, String> getName() {
+        return this.name;
+    }
+
+    public String getPostcode() {
+        return this.postcode;
+    }
+
+    public Map<String, String> getExtratags() {
+        return this.extratags;
+    }
+
+    public Envelope getBbox() {
+        return this.bbox;
+    }
+
+    public long getParentPlaceId() {
+        return this.parentPlaceId;
+    }
+
+    public double getImportance() {
+        return this.importance;
+    }
+
+    public String getCountryCode() {
+        return this.countryCode;
+    }
+
+    public int getRankAddress() {
+        return this.rankAddress;
+    }
+
+    public Map<AddressType, Map<String, String>> getAddressParts() {
+        return this.addressParts;
+    }
+
+    public Set<Map<String, String>> getContext() {
+        return this.context;
+    }
+
+    public String getHouseNumber() {
+        return this.houseNumber;
+    }
+
+    public Point getCentroid() {
+        return this.centroid;
+    }
 }

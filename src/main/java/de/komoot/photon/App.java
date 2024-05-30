@@ -1,92 +1,101 @@
 package de.komoot.photon;
 
-
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.ParameterException;
-import de.komoot.photon.elasticsearch.DatabaseProperties;
-import de.komoot.photon.elasticsearch.Server;
 import de.komoot.photon.nominatim.NominatimConnector;
 import de.komoot.photon.nominatim.NominatimUpdater;
+import de.komoot.photon.searcher.ReverseHandler;
+import de.komoot.photon.searcher.SearchHandler;
 import de.komoot.photon.utils.CorsFilter;
-import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.client.Client;
+import org.slf4j.Logger;
 import spark.Request;
 import spark.Response;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Date;
 
 import static spark.Spark.*;
 
-
-@Slf4j
+/**
+ * Main Photon application.
+ */
 public class App {
+    private static final Logger LOGGER = org.slf4j.LoggerFactory.getLogger(App.class);
 
     public static void main(String[] rawArgs) throws Exception {
-        // parse command line arguments
-        CommandLineArgs args = new CommandLineArgs();
-        final JCommander jCommander = new JCommander(args);
-        try {
-            jCommander.parse(rawArgs);
-            if (args.isCorsAnyOrigin() && args.getCorsOrigin() != null) { // these are mutually exclusive
-                throw new ParameterException("Use only one cors configuration type");
-            }
-        } catch (ParameterException e) {
-            log.warn("could not start photon: " + e.getMessage());
-            jCommander.usage();
-            return;
-        }
-
-        // show help
-        if (args.isUsage()) {
-            jCommander.usage();
-            return;
-        }
+        CommandLineArgs args = parseCommandLine(rawArgs);
 
         if (args.getJsonDump() != null) {
             startJsonDump(args);
             return;
         }
 
+        if (args.getNominatimUpdateInit() != null) {
+            startNominatimUpdateInit(args);
+            return;
+        }
+
         boolean shutdownES = false;
         final Server esServer = new Server(args.getDataDirectory()).start(args.getCluster(), args.getTransportAddresses());
         try {
-            Client esClient = esServer.getClient();
-
-            log.info("Make sure that the ES cluster is ready, this might take some time.");
-            esClient.admin().cluster().prepareHealth().setWaitForYellowStatus().get();
-            log.info("ES cluster is now ready.");
+            LOGGER.info("Make sure that the ES cluster is ready, this might take some time.");
+            esServer.waitForReady();
+            LOGGER.info("ES cluster is now ready.");
 
             if (args.isNominatimImport()) {
                 shutdownES = true;
-                startNominatimImport(args, esServer, esClient);
+                startNominatimImport(args, esServer);
                 return;
             }
 
             // Working on an existing installation.
             // Update the index settings in case there are any changes.
-            esServer.updateIndexSettings();
-            esClient.admin().cluster().prepareHealth().setWaitForYellowStatus().get();
+            esServer.updateIndexSettings(args.getSynonymFile());
+            esServer.refreshIndexes();
 
             if (args.isNominatimUpdate()) {
                 shutdownES = true;
-                final NominatimUpdater nominatimUpdater = setupNominatimUpdater(args, esClient);
-                nominatimUpdater.update();
+                startNominatimUpdate(setupNominatimUpdater(args, esServer), esServer);
                 return;
             }
 
-            // no special action specified -> normal mode: start search API
-            startApi(args, esClient);
+            // No special action specified -> normal mode: start search API
+            startApi(args, esServer);
         } finally {
             if (shutdownES) esServer.shutdown();
         }
     }
 
 
+    private static CommandLineArgs parseCommandLine(String[] rawArgs) {
+        CommandLineArgs args = new CommandLineArgs();
+        final JCommander jCommander = new JCommander(args);
+        try {
+            jCommander.parse(rawArgs);
+
+            // Cors arguments are mutually exclusive.
+            if (args.isCorsAnyOrigin() && args.getCorsOrigin() != null) {
+                throw new ParameterException("Use only one cors configuration type");
+            }
+        } catch (ParameterException e) {
+            LOGGER.warn("Could not start photon: {}", e.getMessage());
+            jCommander.usage();
+            System.exit(1);
+        }
+
+        // show help
+        if (args.isUsage()) {
+            jCommander.usage();
+            System.exit(1);
+        }
+
+        return args;
+    }
+
+
     /**
-     * take nominatim data and dump it to json
-     *
-     * @param args
+     * Take nominatim data and dump it to a Json file.
      */
     private static void startJsonDump(CommandLineArgs args) {
         try {
@@ -94,67 +103,76 @@ public class App {
             final JsonDumper jsonDumper = new JsonDumper(filename, args.getLanguages(), args.getExtraTags());
             NominatimConnector nominatimConnector = new NominatimConnector(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
             nominatimConnector.setImporter(jsonDumper);
-            nominatimConnector.readEntireDatabase(args.getCountryCodes().split(","));
-            log.info("json dump was created: " + filename);
+            nominatimConnector.readEntireDatabase(args.getCountryCodes());
+            LOGGER.info("Json dump was created: {}", filename);
         } catch (FileNotFoundException e) {
-            log.error("cannot create dump", e);
+            LOGGER.error("Cannot create dump", e);
         }
     }
 
 
     /**
-     * take nominatim data to fill elastic search index
-     *
-     * @param args
-     * @param esServer
-     * @param esNodeClient
+     * Read all data from a Nominatim database and import it into a Photon database.
      */
-    private static void startNominatimImport(CommandLineArgs args, Server esServer, Client esNodeClient) {
+    private static void startNominatimImport(CommandLineArgs args, Server esServer) {
         DatabaseProperties dbProperties;
+        NominatimConnector nominatimConnector = new NominatimConnector(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
+        Date importDate = nominatimConnector.getLastImportDate();
         try {
-            dbProperties = esServer.recreateIndex(args.getLanguagesOrDefault()); // clear out previous data
+            dbProperties = esServer.recreateIndex(args.getLanguages(), importDate); // clear out previous data
         } catch (IOException e) {
-            throw new RuntimeException("cannot setup index, elastic search config files not readable", e);
+            throw new RuntimeException("Cannot setup index, elastic search config files not readable", e);
         }
 
-        log.info("starting import from nominatim to photon with languages: " + args.getLanguages());
-        de.komoot.photon.elasticsearch.Importer importer = new de.komoot.photon.elasticsearch.Importer(esNodeClient, dbProperties.getLanguages(), args.getExtraTags());
-        NominatimConnector nominatimConnector = new NominatimConnector(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
-        nominatimConnector.setImporter(importer);
-        nominatimConnector.readEntireDatabase(args.getCountryCodes().split(","));
+        LOGGER.info("Starting import from nominatim to photon with languages: {}", String.join(",", dbProperties.getLanguages()));
+        nominatimConnector.setImporter(esServer.createImporter(dbProperties.getLanguages(), args.getExtraTags()));
+        nominatimConnector.readEntireDatabase(args.getCountryCodes());
 
-        log.info("imported data from nominatim to photon with languages: " + args.getLanguages());
+        LOGGER.info("Imported data from nominatim to photon with languages: {}", String.join(",", dbProperties.getLanguages()));
     }
 
+    private static void startNominatimUpdateInit(CommandLineArgs args) {
+        NominatimUpdater nominatimUpdater = new NominatimUpdater(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
+        nominatimUpdater.initUpdates(args.getNominatimUpdateInit());
+    }
+
+    private static void startNominatimUpdate(NominatimUpdater nominatimUpdater, Server esServer)  {
+        nominatimUpdater.update();
+
+        DatabaseProperties dbProperties = new DatabaseProperties();
+        try {
+            esServer.loadFromDatabase(dbProperties);
+            Date importDate = nominatimUpdater.getLastImportDate();
+            dbProperties.setImportDate(importDate);
+            esServer.saveToDatabase(dbProperties);
+        } catch (IOException e) {
+            throw new RuntimeException("Cannot setup index, elastic search config files not readable", e);
+        }
+    }
+
+
     /**
-     * Prepare Nominatim updater
-     *
-     * @param args
-     * @param esNodeClient
+     * Prepare Nominatim updater.
      */
-    private static NominatimUpdater setupNominatimUpdater(CommandLineArgs args, Client esNodeClient) {
+    private static NominatimUpdater setupNominatimUpdater(CommandLineArgs args, Server server)throws IOException {
         // Get database properties and ensure that the version is compatible.
         DatabaseProperties dbProperties = new DatabaseProperties();
-        dbProperties.loadFromDatabase(esNodeClient);
+        server.loadFromDatabase(dbProperties);
 
         NominatimUpdater nominatimUpdater = new NominatimUpdater(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
-        Updater updater = new de.komoot.photon.elasticsearch.Updater(esNodeClient, dbProperties.getLanguages(), args.getExtraTags());
-        nominatimUpdater.setUpdater(updater);
+        nominatimUpdater.setUpdater(server.createUpdater(dbProperties.getLanguages(), args.getExtraTags()));
         return nominatimUpdater;
     }
 
     /**
-     * start api to accept search requests via http
-     *
-     * @param args
-     * @param esNodeClient
+     * Start API server to accept search requests via http.
      */
-    private static void startApi(CommandLineArgs args, Client esNodeClient) {
+    private static void startApi(CommandLineArgs args, Server server) throws IOException {
         // Get database properties and ensure that the version is compatible.
         DatabaseProperties dbProperties = new DatabaseProperties();
-        dbProperties.loadFromDatabase(esNodeClient);
-        if (!args.getLanguages().isEmpty()) {
-            dbProperties.restrictLanguages(args.getLanguages().split(","));
+        server.loadFromDatabase(dbProperties);
+        if (args.getLanguages(false).length > 0) {
+            dbProperties.restrictLanguages(args.getLanguages());
         }
 
         port(args.getListenPort());
@@ -164,22 +182,43 @@ public class App {
         if (allowedOrigin != null) {
             CorsFilter.enableCORS(allowedOrigin, "get", "*");
         } else {
-            before((request, response) -> {
-                response.type("application/json; charset=UTF-8"); // in the other case set by enableCors
-            });
+            // Set Json content type. In the other case already set by enableCors.
+            before((request, response) -> response.type("application/json; charset=UTF-8"));
         }
 
         // setup search API
-        get("api", new SearchRequestHandler("api", esNodeClient, dbProperties.getLanguages(), args.getDefaultLanguage()));
-        get("api/", new SearchRequestHandler("api/", esNodeClient, dbProperties.getLanguages(), args.getDefaultLanguage()));
-        get("reverse", new ReverseSearchRequestHandler("reverse", esNodeClient, dbProperties.getLanguages(), args.getDefaultLanguage()));
-        get("reverse/", new ReverseSearchRequestHandler("reverse/", esNodeClient, dbProperties.getLanguages(), args.getDefaultLanguage()));
+        String[] langs = dbProperties.getLanguages();
 
-        // setup update API
-        final NominatimUpdater nominatimUpdater = setupNominatimUpdater(args, esNodeClient);
-        get("/nominatim-update", (Request request, Response response) -> {
-            new Thread(() -> nominatimUpdater.update()).start();
-            return "nominatim update started (more information in console output) ...";
-        });
+        SearchHandler searchHandler = server.createSearchHandler(langs, args.getQueryTimeout());
+        get("api", new SearchRequestHandler("api", searchHandler, langs, args.getDefaultLanguage(), args.getMaxResults()));
+        get("api/", new SearchRequestHandler("api/", searchHandler, langs, args.getDefaultLanguage(), args.getMaxResults()));
+
+        ReverseHandler reverseHandler = server.createReverseHandler(args.getQueryTimeout());
+        get("reverse", new ReverseSearchRequestHandler("reverse", reverseHandler, dbProperties.getLanguages(),
+                args.getDefaultLanguage(), args.getMaxReverseResults()));
+        get("reverse/", new ReverseSearchRequestHandler("reverse/", reverseHandler, dbProperties.getLanguages(),
+                args.getDefaultLanguage(), args.getMaxReverseResults()));
+        
+        get("status", new StatusRequestHandler("status", server));
+        get("status/", new StatusRequestHandler("status/", server));
+
+        if (args.isEnableUpdateApi()) {
+            // setup update API
+            final NominatimUpdater nominatimUpdater = setupNominatimUpdater(args, server);
+            if (!nominatimUpdater.isSetUpForUpdates()) {
+                throw new RuntimeException("Update API enabled, but Nominatim database is not prepared. Run -nominatim-update-init-for first.");
+            }
+            get("/nominatim-update/status", (Request request, Response response) -> {
+               if (nominatimUpdater.isBusy()) {
+                   return "\"BUSY\"";
+               }
+
+               return "\"OK\"";
+            });
+            get("/nominatim-update", (Request request, Response response) -> {
+                new Thread(()-> App.startNominatimUpdate(nominatimUpdater, server)).start();
+                return "\"nominatim update started (more information in console output) ...\"";
+            });
+        }
     }
 }

@@ -5,49 +5,77 @@
  */
 package de.komoot.photon.query;
 
-import com.google.common.collect.ImmutableList;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+
+import de.komoot.photon.searcher.TagFilter;
+import spark.QueryParamsMap;
 import spark.Request;
 
-/**
- * @author svantulden
- */
-public class ReverseRequestFactoryTest {
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class ReverseRequestFactoryTest {
 
     private ReverseRequest reverseRequest;
 
-    public void requestWithLongitudeLatitude(Request mockRequest, Double longitude, Double latitude) {
+    private Request createRequestWithLongitudeLatitude(Double longitude, Double latitude) {
+        Request mockRequest = Mockito.mock(Request.class);
+
         Mockito.when(mockRequest.queryParams("lon")).thenReturn(longitude.toString());
         Mockito.when(mockRequest.queryParams("lat")).thenReturn(latitude.toString());
         Mockito.when(mockRequest.queryParamOrDefault("distance_sort", "true")).thenReturn("true");
+
+        QueryParamsMap mockEmptyQueryParamsMap = Mockito.mock(QueryParamsMap.class);
+        Mockito.when(mockRequest.queryMap("osm_tag")).thenReturn(mockEmptyQueryParamsMap);
+        Mockito.when(mockRequest.queryMap("layer")).thenReturn(mockEmptyQueryParamsMap);
+
+        return mockRequest;
+    }
+
+    private void requestWithOsmFilters(Request mockRequest, String... filterParams) {
+        Mockito.when(mockRequest.queryParams("q")).thenReturn("new york");
+
+        QueryParamsMap mockQueryParamsMap = Mockito.mock(QueryParamsMap.class);
+        Mockito.when(mockQueryParamsMap.hasValue()).thenReturn(true);
+        Mockito.when(mockQueryParamsMap.values()).thenReturn(filterParams);
+        Mockito.when(mockRequest.queryMap("osm_tag")).thenReturn(mockQueryParamsMap);
+    }
+
+    private void requestWithLayers(Request mockRequest, String... layers) {
+        QueryParamsMap mockQueryParamsMap = Mockito.mock(QueryParamsMap.class);
+        Mockito.when(mockQueryParamsMap.hasValue()).thenReturn(true);
+        Mockito.when(mockQueryParamsMap.values()).thenReturn(layers);
+        Mockito.when(mockRequest.queryMap("layer")).thenReturn(mockQueryParamsMap);
     }
 
     @Test
-    public void testWithLocation() throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, -87d, 41d);
-        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(ImmutableList.of("en"), "en");
+    void testWithLocation() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
         reverseRequest = reverseRequestFactory.create(mockRequest);
-        Assert.assertEquals(-87, reverseRequest.getLocation().getX(), 0);
-        Assert.assertEquals(41, reverseRequest.getLocation().getY(), 0);
+        assertEquals(-87, reverseRequest.getLocation().getX(), 0);
+        assertEquals(41, reverseRequest.getLocation().getY(), 0);
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lon");
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lat");
     }
 
-    public void assertBadRequest(Request mockRequest, String expectedMessage) {
+    private void assertBadRequest(Request mockRequest, String expectedMessage) {
         try {
-            ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(ImmutableList.of("en"), "en");
+            ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
             reverseRequest = reverseRequestFactory.create(mockRequest);
-            Assert.fail();
+            fail();
         } catch (BadRequestException e) {
-            Assert.assertEquals(expectedMessage, e.getMessage());
+            assertEquals(expectedMessage, e.getMessage());
         }
     }
 
     @Test
-    public void testWithBadLocation() throws Exception {
+    void testWithBadLocation() throws Exception {
         Request mockRequest = Mockito.mock(Request.class);
         Mockito.when(mockRequest.queryParams("lon")).thenReturn("bad");
         Mockito.when(mockRequest.queryParams("lat")).thenReturn("bad");
@@ -57,44 +85,42 @@ public class ReverseRequestFactoryTest {
     }
 
 
-    public void testWithHighLowLongitude(Boolean high) throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, (high) ? 180.01 : -180.01, 0.0);
+    private void testWithHighLowLongitude(Boolean high) throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude((high) ? 180.01 : -180.01, 0.0);
         assertBadRequest(mockRequest, "invalid search term 'lon', expected number >= -180.0 and <= 180.0");
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lon");
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lat");
     }
 
     @Test
-    public void testWithHighLongitude() throws Exception {
+    void testWithHighLongitude() throws Exception {
         testWithHighLowLongitude(true);
     }
 
     @Test
-    public void testWithLowLongitude() throws Exception {
+    void testWithLowLongitude() throws Exception {
         testWithHighLowLongitude(false);
     }
 
-    public void testWithHighLowLatitude(Boolean high) throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, 0.0, (high) ? 90.01 : -90.01);
+    private void testWithHighLowLatitude(Boolean high) throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(0.0, (high) ? 90.01 : -90.01);
         assertBadRequest(mockRequest, "invalid search term 'lat', expected number >= -90.0 and <= 90.0");
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lon");
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lat");
     }
 
     @Test
-    public void testWithHighLatitude() throws Exception {
+    void testWithHighLatitude() throws Exception {
         testWithHighLowLatitude(true);
     }
 
     @Test
-    public void testWithLowLatitude() throws Exception {
+    void testWithLowLatitude() throws Exception {
         testWithHighLowLatitude(false);
     }
 
     @Test
-    public void testWithNoLocation() throws Exception {
+    void testWithNoLocation() throws Exception {
         Request mockRequest = Mockito.mock(Request.class);
         Mockito.when(mockRequest.queryParams("lon")).thenReturn("");
         Mockito.when(mockRequest.queryParams("lat")).thenReturn("");
@@ -103,73 +129,132 @@ public class ReverseRequestFactoryTest {
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("lat");
     }
 
-    public void testWithBadParam(String paramName, String paramValue, String expectedMessage) throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, -87d, 41d);
+    private void testWithBadParam(String paramName, String paramValue, String expectedMessage) throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
         Mockito.when(mockRequest.queryParams(paramName)).thenReturn(paramValue);
         assertBadRequest(mockRequest, expectedMessage);
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams(paramName);
     }
 
     @Test
-    public void testWithNegativeRadius() throws Exception {
-        testWithBadParam("radius", "-10.0", "invalid search term 'radius', expected a strictly positive number.");
+    void testWithNegativeRadius() throws Exception {
+        testWithBadParam("radius", "-10.0", "Invalid search term 'radius', expected a strictly positive number.");
     }
 
     @Test
-    public void testWithZeroRadius() throws Exception {
-        testWithBadParam("radius", "0.0", "invalid search term 'radius', expected a strictly positive number.");
+    void testWithZeroRadius() throws Exception {
+        testWithBadParam("radius", "0.0", "Invalid search term 'radius', expected a strictly positive number.");
     }
 
     @Test
-    public void testWithBadRadius() throws Exception {
-        testWithBadParam("radius", "bad", "invalid search term 'radius', expected a number.");
+    void testWithBadRadius() throws Exception {
+        testWithBadParam("radius", "bad", "Invalid search term 'radius', expected a number.");
     }
 
     @Test
-    public void testHighRadius() throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, -87d, 41d);
+    void testHighRadius() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
         Mockito.when(mockRequest.queryParams("radius")).thenReturn("5.1");
-        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(ImmutableList.of("en"), "en");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
         reverseRequest = reverseRequestFactory.create(mockRequest);
-        Assert.assertEquals(reverseRequest.getRadius(), 5.1d, 0);
+        assertEquals(5.1d, reverseRequest.getRadius(), 0);
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("radius");
     }
 
     @Test
-    public void testWithNegativeLimit() throws Exception {
-        testWithBadParam("limit", "-1", "invalid search term 'limit', expected a strictly positive integer.");
+    void testWithNegativeLimit() throws Exception {
+        testWithBadParam("limit", "-1", "Invalid search term 'limit', expected a strictly positive integer.");
     }
 
     @Test
-    public void testWithZeroLimit() throws Exception {
-        testWithBadParam("limit", "0", "invalid search term 'limit', expected a strictly positive integer.");
+    void testWithZeroLimit() throws Exception {
+        testWithBadParam("limit", "0", "Invalid search term 'limit', expected a strictly positive integer.");
     }
 
     @Test
-    public void testWithBadLimit() throws Exception {
-        testWithBadParam("limit", "bad", "invalid search term 'limit', expected an integer.");
+    void testWithBadLimit() throws Exception {
+        testWithBadParam("limit", "bad", "Invalid search term 'limit', expected an integer.");
     }
 
     @Test
-    public void testHighLimit() throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, -87d, 41d);
+    void testHighLimit() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
         Mockito.when(mockRequest.queryParams("limit")).thenReturn("51");
-        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(ImmutableList.of("en"), "en");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 50);
         reverseRequest = reverseRequestFactory.create(mockRequest);
-        Assert.assertEquals(reverseRequest.getLimit().longValue(), 50);
+        assertEquals(50, reverseRequest.getLimit());
         Mockito.verify(mockRequest, Mockito.times(1)).queryParams("limit");
     }
     
     @Test
-    public void testDistanceSortDefault() throws Exception {
-        Request mockRequest = Mockito.mock(Request.class);
-        requestWithLongitudeLatitude(mockRequest, -87d, 41d);
-        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(ImmutableList.of("en"), "en");
+    void testDistanceSortDefault() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
         reverseRequest = reverseRequestFactory.create(mockRequest);
         Mockito.verify(mockRequest, Mockito.times(1)).queryParamOrDefault("distance_sort", "true");
-        Assert.assertEquals(true, reverseRequest.getLocationDistanceSort());
+        assertEquals(true, reverseRequest.getLocationDistanceSort());
+    }
+
+    @Test
+    void testWithLayersFilters() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        requestWithLayers(mockRequest, "city", "locality");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
+        reverseRequest = reverseRequestFactory.create(mockRequest);
+        assertEquals(new HashSet<>(Arrays.asList("city", "locality")), reverseRequest.getLayerFilters());
+    }
+
+    @Test
+    void testWithDuplicatedLayerFilters() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        requestWithLayers(mockRequest, "city", "locality", "city");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
+        reverseRequest = reverseRequestFactory.create(mockRequest);
+        assertEquals(new HashSet<>(Arrays.asList("city", "locality")), reverseRequest.getLayerFilters());
+    }
+
+    @Test
+    void testWithBadLayerFilters() {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        requestWithLayers(mockRequest, "city", "bad");
+
+        assertBadRequest(mockRequest, "Invalid layer 'bad'. Allowed layers are: house,street,locality,district,city,county,state,country");
+    }
+
+    @Test
+    void testTagFilters() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        requestWithOsmFilters(mockRequest, "foo", ":!bar");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
+        reverseRequest = reverseRequestFactory.create(mockRequest);
+
+        List<TagFilter> result = reverseRequest.getOsmTagFilters();
+
+        assertEquals(2, result.size());
+
+        assertAll("filterlist",
+                () -> assertNotNull(result.get(0)),
+                () -> assertNotNull(result.get(1))
+        );
+    }
+
+    @Test
+    void testBadTagFilters() {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        requestWithOsmFilters(mockRequest, "good", "bad:bad:bad");
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
+
+        assertThrows(BadRequestException.class, () -> reverseRequestFactory.create(mockRequest));
+    }
+
+    @Test
+    void testWithDebug() throws Exception {
+        Request mockRequest = createRequestWithLongitudeLatitude(-87d, 41d);
+        Mockito.when(mockRequest.queryParams("debug")).thenReturn("1");
+
+        ReverseRequestFactory reverseRequestFactory = new ReverseRequestFactory(Collections.singletonList("en"), "en", 10);
+        reverseRequest = reverseRequestFactory.create(mockRequest);
+
+        assertTrue(reverseRequest.getDebug());
     }
 }
